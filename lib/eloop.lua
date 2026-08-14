@@ -158,7 +158,6 @@ function eloop:rec_stop()
 end
 
 function eloop:_rec_stop()
-  self.rec = 0
   if self.count ~= 0 then
     self.callbacks.rec_stop_pre()
     local t = self.prev_time
@@ -170,6 +169,7 @@ function eloop:_rec_stop()
     print("pattern_time: no events recorded")
   end
 
+  self.rec = 0
   self.callbacks.rec_stop_post()
 end
 
