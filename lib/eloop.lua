@@ -64,6 +64,14 @@ end
 --- clear this pattern
 function eloop:clear()
   self.metro:stop()
+
+  for name,id in pairs(self.clocks) do
+    if id then
+      clock.cancel(id)
+      self.clocks[name] = nil
+    end
+  end
+
   self.rec = 0
   self.play = 0
   self.overdub = 0
@@ -218,6 +226,11 @@ function eloop:update_offset()
 end
 --- start the loop
 function eloop:start()
+  if self.play == 1 then
+    print("eloop: already playing")
+    return
+  end
+
   if self.count > 0 then
     self.prev_time = util.time()
     self:_process(self.event[1])
@@ -243,7 +256,7 @@ end
 --- stop this pattern
 function eloop:stop()
   if self.play ~= 1 then
-    print("pattern_time: not playing")
+    print("eloop: not playing")
     return
   end
 
