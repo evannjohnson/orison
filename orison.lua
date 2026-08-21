@@ -501,17 +501,7 @@ end
 --- DRAWING
 lighting_update_handler = function()
   grid_led_clear()
-
-  -- light c notes
-  for x = 2,cols,1 do
-    for y = 1,rows,1 do
-      if grid_to_note_num(x,y) == 60 then
-        grid_led_set(x,y,7)
-      elseif grid_to_note_num(x,y) % 12 == 0 then
-        grid_led_set(x,y,4)
-      end
-    end
-  end
+  -- g:all(0)
 
   -- light transpose keys
   local upper_transpose_level = math.floor((grid_window.y - grid_window_transpose_indicator_nums[2]) / 2)
@@ -520,6 +510,28 @@ lighting_update_handler = function()
   grid_led_set(1, 2, lower_transpose_level)
   grid_led_set(1, 9, upper_transpose_level)
   grid_led_set(1, 10, lower_transpose_level)
+
+  -- light c notes
+  local starting_note = (grid_to_note_num(2,rows))
+  for y=rows,1,-1 do
+    local first_c = -(starting_note + 5*(rows-y)) % 12
+    for x=first_c,cols,12 do
+      -- g:led(x,y,4)
+      grid_led_set(x + 2,y,4)
+    end
+  end
+
+  -- light middle c
+  -- find cells where start + x + 5y = 60
+  -- x + 5y = 60 - starting_note
+  local middle_c_relative = 60 - starting_note
+  -- linear equation: x + 5y = middle_c_relative
+  local y_min = math.max(0, math.ceil((middle_c_relative - cols + 1) / 5))
+  local y_max = math.min(rows - 1, middle_c_relative // 5)
+  for y=y_min,y_max do
+    -- g:led(middle_c_relative - 5 * y, y, 15)
+    grid_led_set(middle_c_relative - 5 * y + 2, rows-y, 15)
+  end
 
   for id,e in pairs(currently_playing) do
     note_info = note_id_to_info(id)
