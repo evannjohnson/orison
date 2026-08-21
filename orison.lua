@@ -15,7 +15,7 @@ local rows = grid_connected and g.device.rows or 8
 local gkey = keyhelper.new(16)
 
 -- forward declare functions
-local pattern_record_start,pattern_record_stop,pattern_clear,grid_led_array_init,grid_press_array_init,grid_led_clear,note_hasher,tempo_change_handler,create_fixed_pulse,clear_fixed_pulse,start_holding,create_mod_pulse,add_to_held,stop_holding,remove_from_held,pattern_stop,pattern_start,note_id_to_info,start_note,matrix_coord_to_note_num,lighting_update_handler,grid_led_set,grid_led_add,grid_to_note_num,table_size,matrix_note,pattern_note,gridredraw,metronome,clear_pattern_notes,get_digit,pressed_keys
+local pattern_record_start,pattern_record_stop,pattern_clear,grid_press_array_init,note_hasher,tempo_change_handler,create_fixed_pulse,clear_fixed_pulse,start_holding,create_mod_pulse,add_to_held,stop_holding,remove_from_held,pattern_stop,pattern_start,note_id_to_info,start_note,matrix_coord_to_note_num,grid_redraw,grid_to_note_num,table_size,matrix_note,pattern_note,metronome,clear_pattern_notes,get_digit,pressed_keys
 
 local grid_led,grid_presses
 local currently_playing = {}
@@ -358,8 +358,6 @@ pattern_start = function(n)
       level = patterns[n].led_level + 2
     end
 
-    grid_led[x][y].add = nil
-
     create_fixed_pulse(x,y,0,level,.9,"rise")
   end
 
@@ -381,12 +379,6 @@ pattern_stop = function(n)
       y = 4
     end
 
-    if pattern.count == 0 then
-      grid_led[x][y].add = nil
-    else
-      grid_led[x][y].add = 2
-    end
-
     clear_fixed_pulse(x,y)
   end
 
@@ -405,7 +397,6 @@ pattern_record_start = function (n)
     y = 4
   end
   local level = patterns[n].led_level
-
 
   -- immediately stop pattern
   if pattern.sync then
@@ -463,12 +454,6 @@ pattern_record_stop = function(n)
       y = 4
     end
 
-    if pattern.count == 0 then
-      grid_led[x][y].add = nil
-    else
-      grid_led[x][y].add = 2
-    end
-
     clear_fixed_pulse(x,y)
     pattern_start(n)
   end
@@ -494,30 +479,36 @@ pattern_clear = function(n)
     x = 1
     y = 4
   end
-
-  grid_led[x][y].add = nil
 end
 
 --- DRAWING
-lighting_update_handler = function()
-  grid_led_clear()
-  -- g:all(0)
+grid_redraw = function()
+  g:all(0)
 
   -- light transpose keys
-  local upper_transpose_level = math.floor((grid_window.y - grid_window_transpose_indicator_nums[2]) / 2)
-  local lower_transpose_level = math.floor((grid_window_transpose_indicator_nums[1] - grid_window.y) / 2)
-  grid_led_set(1, 1, upper_transpose_level)
-  grid_led_set(1, 2, lower_transpose_level)
-  grid_led_set(1, 9, upper_transpose_level)
-  grid_led_set(1, 10, lower_transpose_level)
+  local upper_transpose_level = util.clamp(math.floor((grid_window.y - grid_window_transpose_indicator_nums[2]) / 2), 0, 15)
+  local lower_transpose_level = util.clamp(math.floor((grid_window_transpose_indicator_nums[1] - grid_window.y) / 2), 0, 15)
+  g:led(1, 1, upper_transpose_level)
+  g:led(1, 2, lower_transpose_level)
+  g:led(1, 9, upper_transpose_level)
+  g:led(1, 10, lower_transpose_level)
+
+  -- light pattern keys
+  local p1 = patterns[1].pattern
+  local p2 = patterns[2].pattern
+  if p1.play == 0 and p1.count ~= 0 then
+    g:led(1,3,2)
+  end
+  if p2.play == 0 and p2.count ~= 0 then
+    g:led(1,4,2)
+  end
 
   -- light c notes
   local starting_note = (grid_to_note_num(2,rows))
   for y=rows,1,-1 do
-    local first_c = -(starting_note + 5*(rows-y)) % 12
+    local first_c = 2 + (-(starting_note + 5*(rows-y)) % 12)
     for x=first_c,cols,12 do
-      -- g:led(x,y,4)
-      grid_led_set(x + 2,y,4)
+      g:led(x,y,4)
     end
   end
 
@@ -526,31 +517,38 @@ lighting_update_handler = function()
   -- x + 5y = 60 - starting_note
   local middle_c_relative = 60 - starting_note
   -- linear equation: x + 5y = middle_c_relative
-  local y_min = math.max(0, math.ceil((middle_c_relative - cols + 1) / 5))
+  local y_min = math.max(0, math.ceil((middle_c_relative - cols) / 5) + 1)
   local y_max = math.min(rows - 1, middle_c_relative // 5)
   for y=y_min,y_max do
-    -- g:led(middle_c_relative - 5 * y, y, 15)
-    grid_led_set(middle_c_relative - 5 * y + 2, rows-y, 15)
+    g:led(middle_c_relative - 5 * y + 2, rows-y, 15)
   end
 
   for id,e in pairs(currently_playing) do
-    note_info = note_id_to_info(id)
-    if note_info.source == "1" then
-      grid_led_add(e.x - grid_window.x + 2, grid_window.y - e.y + 1, 1)
-    elseif note_info.source == "2" then
-      grid_led_add(e.x - grid_window.x + 2, grid_window.y - e.y + 1, patterns[1].led_level)
-    elseif note_info.source == "3" then
-      grid_led_add(e.x - grid_window.x + 2, grid_window.y - e.y + 1, patterns[2].led_level)
-    end
+    local x = e.x - grid_window.x + 2
+    local y = grid_window.y - e.y + 1
 
-    if e.pulser ~= nil then
-      grid_led_add(e.x - grid_window.x + 2, grid_window.y - e.y + 1, e.pulser.current)
+    if not (x > cols or y > rows) then
+      note_info = note_id_to_info(id)
+      if note_info.source == 1 then
+        g:led(x, y, 1, true)
+      elseif note_info.source == 2 then
+        g:led(x, y, patterns[1].led_level, true)
+      elseif note_info.source == 3 then
+        g:led(x, y, patterns[2].led_level, true)
+      end
+
+      if e.pulser ~= nil then
+        g:led(x, y, e.pulser.current, true)
+      end
     end
   end
 
   for i, obj in pairs(lighting_over_time.fixed) do
     obj.frametrack = obj.frametrack - 1
-    grid_led_set(obj.x, obj.y, obj.current)
+
+    if obj.x <= cols and obj.y <= rows then
+      g:led(obj.x, obj.y, obj.current)
+    end
 
     if obj.frametrack == 0 then
       obj.current = obj.current + obj.dir
@@ -596,73 +594,6 @@ lighting_update_handler = function()
       end
 
       obj.frametrack = obj.frames_per_step
-    end
-  end
-
-  gridredraw()
-end
-
-grid_led_array_init = function()
-  init_grid = {}
-
-  for x=1,cols do
-    init_grid[x] = {}
-    for y=1,rows do
-      init_grid[x][y] = {level = 0, dirty = false}
-    end
-  end
-
-  return init_grid
-end
-
-grid_led_set = function(x, y, level)
-  level = util.clamp(level,0,15)
-
-  if x < 1 or x > cols or y < 1 or y > rows or level == grid_led[x][y].level then
-    return
-  else
-    grid_led[x][y].level = level
-    grid_led[x][y].dirty = true
-  end
-end
-
-grid_led_add = function(x, y, val)
-  if val == 0 or x < 1 or x > cols or y < 1 or y > rows then
-    return
-  end
-
-  level = grid_led[x][y].level
-
-  if val > 0 and level == 15 then
-    return
-  elseif val < 0 and level == 0 then
-    return
-  else
-    grid_led[x][y].level = util.clamp(level + val, 0, 15)
-  end
-end
-
-grid_led_clear = function()
-  for x=1,cols do
-    for y=1,rows do
-      grid_led[x][y].level = 0
-      grid_led[x][y].dirty = true
-    end
-  end
-end
-
-gridredraw = function()
-  for x=1,cols do
-    for y=1,rows do
-      if grid_led[x][y].add ~= nil then
-        grid_led_add(x, y, grid_led[x][y].add)
-      end
-
-      -- if true then
-      if grid_led[x][y].dirty then
-        g:led(x,y,grid_led[x][y].level)
-        grid_led[x][y].dirty = false
-      end
     end
   end
 
@@ -788,11 +719,10 @@ note_hasher = function(x,y)
 end
 
 note_id_to_info = function(id)
-  id = id .. ""
-  note_hash = id:sub(1,-3)
+  note_hash = id // 100
   y = math.floor(note_hash/40)
   x = note_hash - y*40
-  return {x = x, y = y, source = id:sub(-2,-2), note_hash = note_hash}
+  return {x = x, y = y, source = id % 100 // 10, note_hash = note_hash}
 end
 
 get_nonconflicting_id = function(id)
@@ -1235,13 +1165,11 @@ function init()
   engine.stopAll()
   params:bang()
 
-  grid_led = grid_led_array_init()
   grid_presses = grid_press_array_init()
 
   grid_refresh_metro = metro.init()
-  grid_refresh_metro.event = function(stage)
-    lighting_update_handler()
-    gridredraw()
+  grid_refresh_metro.event = function()
+    grid_redraw()
   end
   grid_refresh_metro:start(1 / grid_refresh_rate)
 
