@@ -6,7 +6,7 @@ keyhelper.__index = keyhelper
 local _key = {}
 _key.__index = _key
 
-local threshold = 0.5 -- time in seconds that denotes short vs long press
+local long_press_threshold = 0.5 -- time in seconds that denotes a long press
 
 function _key.new(x, y)
   local t = {}
@@ -42,11 +42,11 @@ function keyhelper.new(x_size, y_size)
 end
 
 -- actions to support callbacks for
--- press(x, y, z): on key press down
--- release(x, y, z): on key release
--- short_press(x, y): on key release shortly after a press
--- long_press_start(x, y): detected a long press (held 0.5 seconds)
--- long_press_release(x, y): released a long press
+-- press(self, x, y, z): on key press down
+-- release(self, x, y, z): on key release
+-- short_press(self, x, y): on key release shortly after a press
+-- long_press_start(self, x, y): detected a long press (held 0.5 seconds)
+-- long_press_release(self, x, y): released a long press
 
 -- z comes first, to enable leaving off y if using single-dimensional button array
 -- ex. keyhelper:handle(z, k) for norns keys
@@ -66,23 +66,23 @@ function keyhelper:handle(z, x, y)
       key.press_time = util.time()
     end
 
-    if key.press then key.press(x, y) end
+    if key.press then key:press(x, y) end
 
     if key.long_press_start or key.long_press_release then
       key.long_press_metro = metro.init(function()
         key.long_press_active = true
         key.press_time = nil -- not a short press
-        if key.long_press_start then key.long_press_start(x, y) end
-      end, threshold, 1)
+        if key.long_press_start then key:long_press_start(x, y) end
+      end, long_press_threshold, 1)
     end
   elseif z == 0 then
     key.z = 0
     key.pressed = false
-    if key.release then key.release(x, y) end
+    if key.release then key:release(x, y) end
 
     if key.short_press and key.press_time then
-      if util.time() - key.press_time < threshold then
-        key.short_press(x, y)
+      if util.time() - key.press_time < long_press_threshold then
+        key:short_press(x, y)
       end
     end
 
@@ -94,7 +94,7 @@ function keyhelper:handle(z, x, y)
 
     if key.long_press_active then
       key.long_press_active = false
-      if key.long_press_release then key.long_press_release(x, y) end
+      if key.long_press_release then key:long_press_release(x, y) end
     end
   end
 end
@@ -104,13 +104,22 @@ function _key:short_press_cancel()
   self.press_time = nil
 end
 
+-- the current press should not be treated as long
+-- will prevent triggering any "long" key press callbacks
+-- that haven't been triggered yet
+function _key:long_press_cancel()
+  key.long_press_metro:stop()
+  metro.free(key.long_press_metro.id)
+  key.long_press_metro = nil
+end
+
 -- manually mark a press as long, calling long_press_start if not already in a long press
 function _key:long_press_activate()
-  if self.pressed then
+  if self.pressed and not self.long_press_active then
     self.long_press_active = true
     self.press_time = nil -- not a short press
 
-    if self.long_press_start then self.long_press_start(self.x, self.y) end
+    if self.long_press_start then self:long_press_start(self.x, self.y) end
   end
 end
 
