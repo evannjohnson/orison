@@ -15,16 +15,16 @@ local rows = grid_connected and g.device.rows or 8
 local gkey = keyhelper.new(16)
 
 -- forward declare functions
-local pattern_record_start,pattern_record_stop,pattern_clear,grid_press_array_init,note_hasher,tempo_change_handler,create_fixed_pulse,clear_fixed_pulse,start_holding,create_mod_pulse,add_to_held,stop_holding,remove_from_held,pattern_stop,pattern_start,note_id_to_info,start_note,matrix_coord_to_note_num,grid_redraw,grid_to_note_num,table_size,matrix_note,pattern_note,metronome,clear_pattern_notes,get_digit,pressed_keys
+local pattern_record_start,pattern_record_stop,pattern_clear,grid_press_array_init,note_hasher,tempo_change_handler,start_holding,add_to_held,stop_holding,remove_from_held,pattern_stop,pattern_start,note_id_to_info,start_note,matrix_coord_to_note_num,grid_redraw,grid_to_note_num,table_size,matrix_note,pattern_note,metronome,clear_pattern_notes,get_digit,pressed_keys,create_grid_pulser
 
-local grid_led,grid_presses
+local grid_presses
 local currently_playing = {}
+local pulsers = {}
 local enc_control = 0
 local pressed_notes = {}
 local held_notes = {}
 local holding = false
 local bpm = clock.get_tempo()
-local holding_led_pulse_level = 4
 local grid_refresh_rate = 60
 local screen_refresh_metro
 local max_voices = 100
@@ -83,35 +83,26 @@ start_holding = function()
     return
   end
 
-  create_fixed_pulse(1, 8, 2, 8, .75, "rise")
+  pulsers.hold = create_grid_pulser(4, .75, "rise")
   holding = true
 end
 
 add_to_held = function(note)
-  note.pulser = create_mod_pulse(holding_led_pulse_level, .75, note.id, "rise")
-
-  if holding then
-    for id, e2 in pairs(held_notes) do
-      note.pulser.frametrack = e2.pulser.frametrack
-      note.pulser.dir = e2.pulser.dir
-      note.pulser.current = e2.pulser.current
-      break
-    end
-  end
-
-  held_notes[note.id] = note
   start_holding()
+  note.pulser = pulsers.hold
+  held_notes[note.id] = note
 end
 
 stop_holding = function()
   for id in pairs(held_notes) do
     e = held_notes[id]
     e.state = 0
+    e.pulser = nil
     held_notes[id] = nil
     matrix_note(e)
   end
 
-  clear_fixed_pulse(1,8)
+  pulsers.hold = nil
   holding = false
 end
 
@@ -346,19 +337,7 @@ pattern_start = function(n)
   end
 
   pattern.callbacks.start = function()
-    local x,y,level
-    if n == 1 then
-      x = 1
-      y = 3
-      level = patterns[n].led_level
-    elseif n == 2 then
-      x = 1
-      y = 4
-      -- TODO: investigate this
-      level = patterns[n].led_level + 2
-    end
-
-    create_fixed_pulse(x,y,0,level,.9,"rise")
+    pulsers["pattern_"..n] = create_grid_pulser(patterns[n].led_level + 2, .9, "rise")
   end
 
   pattern:start()
@@ -369,42 +348,21 @@ pattern_stop = function(n)
 
   pattern.callbacks.stop = function()
     clear_pattern_notes(patterns[n])
-
-    local x,y
-    if n == 1 then
-      x = 1
-      y = 3
-    elseif n == 2 then
-      x = 1
-      y = 4
-    end
-
-    clear_fixed_pulse(x,y)
+    pulsers["pattern_"..n] = nil
   end
 
   pattern:stop()
 end
 
-pattern_record_start = function (n)
+pattern_record_start = function(n)
   pattern = patterns[n].pattern
-
-  local x,y
-  if n == 1 then
-    x = 1
-    y = 3
-  elseif n == 2 then
-    x = 1
-    y = 4
-  end
-  local level = patterns[n].led_level
 
   -- immediately stop pattern
   if pattern.sync then
     pattern.sync = false
     pattern_stop(n)
     pattern.sync = true
-
-    create_fixed_pulse(x,y,0,level,.3,"wave")
+    pulsers["pattern_"..n] = create_grid_pulser(patterns[n].led_level, .3, "wave")
   else
     pattern_stop(n)
   end
@@ -422,8 +380,7 @@ pattern_record_start = function (n)
       pattern:watch(p)
     end
 
-    clear_fixed_pulse(x,y)
-    create_fixed_pulse(x,y,0,level,.9,"fall")
+    pulsers["pattern_"..n] = create_grid_pulser(patterns[n].led_level, .9, "fall")
   end
 
   pattern:rec_start()
@@ -445,16 +402,7 @@ pattern_record_stop = function(n)
   end
 
   pattern.callbacks.rec_stop_post = function()
-    local x,y
-    if n == 1 then
-      x = 1
-      y = 3
-    elseif n == 2 then
-      x = 1
-      y = 4
-    end
-
-    clear_fixed_pulse(x,y)
+    pulsers["pattern_"..n] = nil
     pattern_start(n)
   end
 
@@ -470,39 +418,57 @@ pattern_clear = function(n)
   end
 
   pattern:clear()
-
-  local x,y
-  if n == 1 then
-    x = 1
-    y = 3
-  elseif n == 2 then
-    x = 1
-    y = 4
-  end
 end
 
 --- DRAWING
-grid_redraw = function()
-  g:all(0)
+local function render_control_strip()
+  local strip = {0,0,0,0,0,0,0,0}
 
-  -- light transpose keys
   local upper_transpose_level = util.clamp(math.floor((grid_window.y - grid_window_transpose_indicator_nums[2]) / 2), 0, 15)
   local lower_transpose_level = util.clamp(math.floor((grid_window_transpose_indicator_nums[1] - grid_window.y) / 2), 0, 15)
-  g:led(1, 1, upper_transpose_level)
-  g:led(1, 2, lower_transpose_level)
-  g:led(1, 9, upper_transpose_level)
-  g:led(1, 10, lower_transpose_level)
+  strip[1] = upper_transpose_level
+  strip[2] = lower_transpose_level
 
-  -- light pattern keys
   local p1 = patterns[1].pattern
   local p2 = patterns[2].pattern
   if p1.play == 0 and p1.count ~= 0 then
-    g:led(1,3,2)
+    strip[3] = 2
   end
   if p2.play == 0 and p2.count ~= 0 then
-    g:led(1,4,2)
+    strip[4] = 2
   end
 
+  if pulsers.pattern_1 then
+    strip[3] = pulsers.pattern_1.current
+  end
+  if pulsers.pattern_2 then
+    strip[4] = pulsers.pattern_2.current
+  end
+
+  if holding then
+    strip[8] = pulsers.hold.current
+  end
+
+  return strip
+end
+
+grid_redraw = function()
+  g:all(0)
+  local is_256 = rows == 16
+
+  -- control strip
+  local control_strip = render_control_strip()
+  for y,level in ipairs(control_strip) do
+    g:led(1,y,level)
+  end
+
+  if is_256 then
+    for y,level in ipairs(control_strip) do
+      g:led(1,y+8,level)
+    end
+  end
+
+  -- note grid
   -- light c notes
   local starting_note = (grid_to_note_num(2,rows))
   for y=rows,1,-1 do
@@ -537,113 +503,57 @@ grid_redraw = function()
         g:led(x, y, patterns[2].led_level, true)
       end
 
-      if e.pulser ~= nil then
+      if e.pulser then
+        -- print(inspect(e.pulser))
         g:led(x, y, e.pulser.current, true)
       end
     end
   end
 
-  for i, obj in pairs(lighting_over_time.fixed) do
-    obj.frametrack = obj.frametrack - 1
+  -- step pulsers
+  for _,pulser in pairs(pulsers) do
+    pulser.frametrack = pulser.frametrack - 1
+    if pulser.frametrack == 0 then
+      pulser.current = pulser.current + pulser.dir
+      if pulser.current == 0 then
+        pulser.dir = 1
 
-    if obj.x <= cols and obj.y <= rows then
-      g:led(obj.x, obj.y, obj.current)
-    end
-
-    if obj.frametrack == 0 then
-      obj.current = obj.current + obj.dir
-
-      if obj.current == obj.pmin then
-        obj.dir = 1
-
-        if obj.shape == "fall" then
-          obj.current = obj.pmax
-          obj.dir = -1
+        if pulser.shape == "fall" then
+          pulser.current = pulser.range
+          pulser.dir = -1
         end
-      elseif obj.current == obj.pmax then
-        obj.dir = -1
+      elseif pulser.current == pulser.range then
+        pulser.dir = -1
 
-        if obj.shape == "rise" then
-          obj.current = obj.pmin
-          obj.dir = 1
+        if pulser.shape == "rise" then
+          pulser.current = 0
+          pulser.dir = 1
         end
       end
 
-      obj.frametrack = obj.frames_per_step
-    end
-  end
-
-  for i, obj in pairs(lighting_over_time.mod) do
-    obj.frametrack = obj.frametrack - 1
-    if obj.frametrack == 0 then
-      obj.current = obj.current + obj.dir
-      if obj.current == 0 then
-        obj.dir = 1
-
-        if obj.shape == "fall" then
-          obj.current = obj.range
-          obj.dir = -1
-        end
-      elseif obj.current == obj.range then
-        obj.dir = -1
-
-        if obj.shape == "rise" then
-          obj.current = 0
-          obj.dir = 1
-        end
-      end
-
-      obj.frametrack = obj.frames_per_step
+      pulser.frametrack = pulser.frames_per_step
     end
   end
 
   g:refresh()
 end
 
-create_fixed_pulse = function(x, y, pmin, pmax, rate, shape)
-  pulse = {x = x, y = y, pmin = pmin, pmax = pmax, rate = rate, current = pmin, dir = 1, mode = "fixed", shape = shape}
+create_grid_pulser = function(range, rate, shape)
+  pulser = {range = range, rate = rate, current = 0, dir = 1, shape = shape}
 
   if shape == "wave" then
-    pulse.frames_per_step = math.floor(0.5 + rate * grid_refresh_rate / (2*(pmax - pmin)))
+    pulser.frames_per_step = math.floor(0.5 + rate * grid_refresh_rate / (2*range))
   elseif shape == "rise" or shape == "fall" then
-    pulse.frames_per_step = math.floor(0.5 + rate * grid_refresh_rate / (pmax - pmin))
+    pulser.frames_per_step = math.floor(0.5 + rate * grid_refresh_rate / range)
 
     if shape == "fall" then
-      pulse.dir = -1
-      pulse.current = pmax
+      pulser.dir = -1
+      pulser.current = range
     end
   end
-  pulse.frametrack = pulse.frames_per_step
+  pulser.frametrack = pulser.frames_per_step
 
-  id = y*16 + x
-  lighting_over_time.fixed[id] = pulse
-
-  return pulse
-end
-
-clear_fixed_pulse = function(x, y)
-  id = y*16 + x
-  lighting_over_time.fixed[id] = nil
-end
-
-create_mod_pulse = function(range, rate, note_id, shape)
-  pulse = {range = range, current = 0, dir = 1, mode = "mod", note_id = note_id, shape = shape}
-
-  if shape == "wave" then
-    pulse.frames_per_step = math.floor(0.5 + rate * grid_refresh_rate / (2*range))
-  elseif shape == "rise" or shape == "fall" then
-    pulse.frames_per_step = math.floor(0.5 + rate * grid_refresh_rate / range)
-
-    if shape == "fall" then
-      pulse.dir = -1
-      pulse.current = range
-    end
-  end
-  pulse.frametrack = pulse.frames_per_step
-
-  lighting_over_time.mod[note_id] = pulse
-
-  return pulse
+  return pulser
 end
 
 function redraw()
@@ -848,7 +758,7 @@ pressed_keys = {
     return gkey[6].pressed or gkey[14].pressed
   end,
   ctrl = function()
-    return gkey[7].pressed or gkey[5].pressed
+    return gkey[7].pressed or gkey[15].pressed
   end,
   hold = function()
     if gkey[8].pressed then
