@@ -118,10 +118,6 @@ function eloop:set_time_factor_sync_div(i)
   end
 end
 
-function eloop:set_time_factor(f)
-  self.time_factor = f or 1
-end
-
 --- start recording
 function eloop:rec_start()
   if not self.sync then
