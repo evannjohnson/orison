@@ -25,7 +25,7 @@ local pressed_notes = {}
 local held_notes = {}
 local holding = false
 local bpm = clock.get_tempo()
-local grid_refresh_rate = 60
+local grid_refresh_rate = 240
 local screen_refresh_metro
 local max_voices = 100
 
