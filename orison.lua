@@ -1,23 +1,16 @@
-inspect= require 'tools.inspect'
 local music = require 'musicutil'
 local eloop = include 'lib/eloop'
 local keyhelper = include 'lib/keyhelper'
 
 local polysub = require 'polysub'
 
-local g = grid.connect()
-local grid_connected = g.device~= nil and true or false
-local cols = grid_connected and g.device.cols or 16
-local rows = grid_connected and g.device.rows or 8
-
 -- just use keyhelper for 1st column
 -- lower 8 keys are copy of top 8 keys w/ 256 for ergo
 local gkey = keyhelper.new(16)
 
 -- forward declare functions
-local pattern_record_start,pattern_record_stop,pattern_clear,grid_press_array_init,note_hasher,tempo_change_handler,start_holding,add_to_held,stop_holding,remove_from_held,pattern_stop,pattern_start,note_id_to_info,start_note,matrix_coord_to_note_num,grid_redraw,grid_to_note_num,table_size,matrix_note,pattern_note,metronome,clear_pattern_notes,get_digit,pressed_keys,create_grid_pulser
+local g,grid_connected,grid_window,pattern_record_start,pattern_record_stop,pattern_clear,note_hasher,tempo_change_handler,start_holding,add_to_held,stop_holding,remove_from_held,pattern_stop,pattern_start,note_id_to_info,start_note,matrix_coord_to_note_num,grid_redraw,grid_to_note_num,table_size,matrix_note,pattern_note,metronome,clear_pattern_notes,get_digit,pressed_keys,create_grid_pulser,grid_port_options
 
-local grid_presses
 local currently_playing = {}
 local pulsers = {}
 local enc_control = 0
@@ -44,13 +37,6 @@ engine.name = 'PolySub'
 
 -- current count of active voices
 local nvoices = 0
-local grid_window = {x = 5, y = 14}
-local grid_window_transpose_indicator_nums = {21, 7}
-if rows == 16 then
-  grid_window.y = 18
-  grid_window_transpose_indicator_nums = {25,11}
-end
-local lighting_over_time = {mod = {}, fixed = {}}
 local row_interval = 5
 local metrokey = false
 local metrorun = 0
@@ -137,7 +123,6 @@ clear_all_notes = function()
     for id in pairs(held_notes) do
       held_notes[id] = nil
     end
-    lighting_over_time.fixed[129] = nil
     holding = false
   end
 end
@@ -421,11 +406,21 @@ pattern_clear = function(n)
 end
 
 --- DRAWING
-local function render_control_strip()
+local function render_control_strip(is_256)
   local strip = {0,0,0,0,0,0,0,0}
 
-  local upper_transpose_level = util.clamp(math.floor((grid_window.y - grid_window_transpose_indicator_nums[2]) / 2), 0, 15)
-  local lower_transpose_level = util.clamp(math.floor((grid_window_transpose_indicator_nums[1] - grid_window.y) / 2), 0, 15)
+  local upper_transpose_level_base
+  local lower_transpose_level_base
+  if is_256 then
+    upper_transpose_level_base = 11
+    lower_transpose_level_base = 25
+  else
+    upper_transpose_level_base = 7
+    lower_transpose_level_base = 21
+  end
+
+  local upper_transpose_level = util.clamp(math.floor((grid_window.y - upper_transpose_level_base) / 2), 0, 15)
+  local lower_transpose_level = util.clamp(math.floor((lower_transpose_level_base - grid_window.y) / 2), 0, 15)
   strip[1] = upper_transpose_level
   strip[2] = lower_transpose_level
 
@@ -454,10 +449,10 @@ end
 
 grid_redraw = function()
   g:all(0)
-  local is_256 = rows == 16
+  local is_256 = g.device.rows == 16
 
   -- control strip
-  local control_strip = render_control_strip()
+  local control_strip = render_control_strip(is_256)
   for y,level in ipairs(control_strip) do
     g:led(1,y,level)
   end
@@ -470,10 +465,10 @@ grid_redraw = function()
 
   -- note grid
   -- light c notes
-  local starting_note = (grid_to_note_num(2,rows))
-  for y=rows,1,-1 do
-    local first_c = 2 + (-(starting_note + 5*(rows-y)) % 12)
-    for x=first_c,cols,12 do
+  local starting_note = (grid_to_note_num(2,g.device.rows))
+  for y=g.device.rows,1,-1 do
+    local first_c = 2 + (-(starting_note + 5*(g.device.rows-y)) % 12)
+    for x=first_c,g.device.cols,12 do
       g:led(x,y,4)
     end
   end
@@ -483,17 +478,17 @@ grid_redraw = function()
   -- x + 5y = 60 - starting_note
   local middle_c_relative = 60 - starting_note
   -- linear equation: x + 5y = middle_c_relative
-  local y_min = math.max(0, math.ceil((middle_c_relative - cols) / 5) + 1)
-  local y_max = math.min(rows - 1, middle_c_relative // 5)
+  local y_min = math.max(0, math.ceil((middle_c_relative - g.device.cols) / 5) + 1)
+  local y_max = math.min(g.device.rows - 1, middle_c_relative // 5)
   for y=y_min,y_max do
-    g:led(middle_c_relative - 5 * y + 2, rows-y, 15)
+    g:led(middle_c_relative - 5 * y + 2, g.device.rows-y, 7)
   end
 
   for id,e in pairs(currently_playing) do
     local x = e.x - grid_window.x + 2
     local y = grid_window.y - e.y + 1
 
-    if not (x > cols or y > rows) then
+    if not (x > g.device.cols or y > g.device.rows) then
       note_info = note_id_to_info(id)
       if note_info.source == 1 then
         g:led(x, y, 1, true)
@@ -504,7 +499,6 @@ grid_redraw = function()
       end
 
       if e.pulser then
-        -- print(inspect(e.pulser))
         g:led(x, y, e.pulser.current, true)
       end
     end
@@ -668,19 +662,6 @@ table_size = function(table)
 end
 
 --- HARDWARE
-grid_press_array_init = function()
-  init_grid = {}
-
-  for x=1,cols do
-    init_grid[x] = {}
-    for y=1,rows do
-      init_grid[x][y] = 0
-    end
-  end
-
-  return init_grid
-end
-
 gkey[1].press = function()
   if pressed_keys.ctrl() then
     grid_window.x = grid_window.x + 2
@@ -808,59 +789,94 @@ gkey[16].press = holdkey_press
 gkey[16].short_press = holdkey_short_press
 gkey[16].long_press_start = holdkey_long_press_start
 
-function g.key(x, y, z)
-  grid_presses[x][y] = z
-  if x == 1 then
-    gkey:handle(z, y)
-  else
-    p = {}
-    p.x = grid_window.x + x - 2
-    p.y = grid_window.y - y + 1
-    p.state = z
-    p.id = note_hasher(grid_window.x + x - 2, grid_window.y - y + 1) * 100 + sources.pattern1 * 10 -- 2nd to last digit of ID specifies source
-    patterns[1].pattern:watch(p)
+local function init_g_key()
+  function g.key(x, y, z)
+    if x == 1 then
+      gkey:handle(z, y)
+    else
+      p = {}
+      p.x = grid_window.x + x - 2
+      p.y = grid_window.y - y + 1
+      p.state = z
+      p.id = note_hasher(grid_window.x + x - 2, grid_window.y - y + 1) * 100 + sources.pattern1 * 10 -- 2nd to last digit of ID specifies source
+      patterns[1].pattern:watch(p)
 
-    p2 = {}
-    p2.x = grid_window.x + x - 2
-    p2.y = grid_window.y - y + 1
-    p2.state = z
-    p2.id = note_hasher(grid_window.x + x - 2, grid_window.y - y + 1) * 100 + sources.pattern2 * 10
-    patterns[2].pattern:watch(p2)
+      p2 = {}
+      p2.x = grid_window.x + x - 2
+      p2.y = grid_window.y - y + 1
+      p2.state = z
+      p2.id = note_hasher(grid_window.x + x - 2, grid_window.y - y + 1) * 100 + sources.pattern2 * 10
+      patterns[2].pattern:watch(p2)
 
-    e = {}
-    e.x = grid_window.x + x - 2
-    e.y = grid_window.y - y + 1
-    e.state = z
-    e.id = note_hasher(grid_window.x + x - 2, grid_window.y - y + 1) * 100 + sources.pressed * 10
+      e = {}
+      e.x = grid_window.x + x - 2
+      e.y = grid_window.y - y + 1
+      e.state = z
+      e.id = note_hasher(grid_window.x + x - 2, grid_window.y - y + 1) * 100 + sources.pressed * 10
 
-    if z == 1 then
-      local pressed_hold_key = pressed_keys.hold()
-      if pressed_hold_key then
-        pressed_hold_key:short_press_cancel()
-        if held_notes[e.id] ~= nil then
-          remove_from_held(e.id)
+      if z == 1 then
+        local pressed_hold_key = pressed_keys.hold()
+        if pressed_hold_key then
+          pressed_hold_key:short_press_cancel()
+          if held_notes[e.id] ~= nil then
+            remove_from_held(e.id)
+          else
+            add_to_held(e)
+            matrix_note(e)
+          end
         else
-          add_to_held(e)
           matrix_note(e)
+          e.x_transpose_since_press = 0
+          e.y_transpose_since_press = 0
+          pressed_notes[e.id] = e
         end
       else
-        matrix_note(e)
-        e.x_transpose_since_press = 0
-        e.y_transpose_since_press = 0
-        pressed_notes[e.id] = e
-      end
-    else
-      for id, e2 in pairs(pressed_notes) do
-        if (grid_window.x + x - 2) == (e2.x + e2.x_transpose_since_press) and (grid_window.y - y + 1) == (e2.y + e2.y_transpose_since_press) then
-          e2.state = 0
-          matrix_note(e2)
-          pressed_notes[id] = nil
-          return
+        for id, e2 in pairs(pressed_notes) do
+          if (grid_window.x + x - 2) == (e2.x + e2.x_transpose_since_press) and (grid_window.y - y + 1) == (e2.y + e2.y_transpose_since_press) then
+            e2.state = 0
+            matrix_note(e2)
+            pressed_notes[id] = nil
+            return
+          end
         end
+        pressed_notes[e.id] = nil
+        matrix_note(e)
       end
-      pressed_notes[e.id] = nil
-      matrix_note(e)
     end
+  end
+end
+
+local function init_grid(port)
+  if type(port) == "number" then
+    g = grid.connect(port)
+    grid.add = nil
+    grid.remove = nil
+  else -- auto
+    for i=1,4 do
+      g = grid.connect(i)
+      if g.device then
+        break
+      end
+    end
+
+    grid.add = function(dev)
+      if (not g or not g.device) and dev.port then
+        g = grid.connect(dev.port)
+        init_g_key()
+      elseif (g and g.device) and (g.device.port == dev.port) then
+        init_g_key()
+      end
+    end
+
+    grid.remove = function(dev)
+      if g.device and dev.port == g.device.port then
+        g.key = nil
+      end
+    end
+  end
+
+  if g then
+    init_g_key()
   end
 end
 
@@ -1072,14 +1088,32 @@ function init()
   params:add_separator("polysub_sep", "polysub")
   polysub:params()
 
+  params:add_separator("devices_sep", "devices")
+  grid_port_options = {"auto", 1, 2, 3, 4}
+  params:add{
+    id = "grid_port",
+    name = "grid port",
+    type = "option",
+    options = grid_port_options,
+    default = 1,
+    action=function(i)
+        init_grid(grid_port_options[i])
+    end
+  }
+
   engine.stopAll()
   params:bang()
 
-  grid_presses = grid_press_array_init()
+  grid_window = {x = 5, y = 14}
+  if g.device and g.device.rows == 16 then
+    grid_window.y = 18
+  end
 
   grid_refresh_metro = metro.init()
   grid_refresh_metro.event = function()
-    grid_redraw()
+    if g and g.device then
+      grid_redraw()
+    end
   end
   grid_refresh_metro:start(1 / grid_refresh_rate)
 
